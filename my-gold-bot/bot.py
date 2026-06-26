@@ -8,7 +8,7 @@ CHAT_ID = '679809289'
 LOG_FILE = "trades_log.csv"
 bot = telebot.TeleBot(BOT_TOKEN)
 
-# تحميل النموذج الذكي
+# تحميل النموذج
 model = PPO.load("gold_master_model")
 active_trades = []
 
@@ -19,14 +19,14 @@ def log_trade(trade_type, result, profit):
 def get_live_data():
     df = yf.download("GC=F", period="5d", interval="5m", auto_adjust=True)
     if df.empty: return None
-    
     if isinstance(df.columns, pd.MultiIndex): df.columns = df.columns.get_level_values(0)
     if 'Close' not in df.columns: df.rename(columns={df.columns[0]: 'Close'}, inplace=True)
     
-    # إضافة المؤشرات الفنية
+    # إضافة المؤشرات
     df.ta.rsi(length=14, append=True)
     df.ta.sma(length=20, append=True)
     df.ta.macd(append=True)
+    df.ta.atr(length=14, append=True) # ضروري لحساب الوقف والهدف الذكي
     
     return df.dropna().astype(float)
 
@@ -35,8 +35,9 @@ def trade():
     if df is None or len(df) < 25: return
     
     current_price = float(df['Close'].iloc[-1])
+    atr = float(df['ATRr_14'].iloc[-1]) # جلب قيمة التقلب الحالية
     
-    # إدارة الصفقات المفتوحة
+    # متابعة الصفقات
     for t in active_trades[:]:
         if (t['type'] == 'buy' and current_price >= t['tp']) or (t['type'] == 'sell' and current_price <= t['tp']):
             log_trade(t['type'], 'win', abs(t['tp'] - t['entry']))
@@ -54,28 +55,32 @@ def trade():
         action, _ = model.predict(obs)
         
         if action in [0, 1] and len(active_trades) < 2:
-            sl, tp = (current_price*0.995, current_price*1.015) if action == 1 else (current_price*1.005, current_price*0.985)
+            # استخدام الـ ATR لتحديد أهداف ووقف منطقي
+            if action == 1: # BUY
+                sl = current_price - (atr * 1.0)
+                tp = current_price + (atr * 2.0)
+            else: # SELL
+                sl = current_price + (atr * 1.0)
+                tp = current_price - (atr * 2.0)
+                
             trade_type = "BUY" if action == 1 else "SELL"
             icon = "🟢" if action == 1 else "🔴"
             
-            # الرسالة بتنسيق إنجليزي احترافي
             message = (
                 f"{icon} {trade_type} Signal | Gold (GC=F)\n"
                 f"Entry: {current_price:.2f}\n"
                 f"Stop Loss: {sl:.2f}\n"
                 f"Take Profit: {tp:.2f}"
             )
-            
             bot.send_message(CHAT_ID, message)
             active_trades.append({'type': 'buy' if action == 1 else 'sell', 'tp': tp, 'sl': sl, 'entry': current_price})
-    except Exception as e: 
-        print(f"Decision Error: {e}")
+    except Exception as e: print(f"Decision Error: {e}")
 
 # --- تشغيل البوت ---
 def run_bot():
     while True:
         trade()
-        time.sleep(300) 
+        time.sleep(300)
 
 threading.Thread(target=run_bot, daemon=True).start()
 bot.infinity_polling()
