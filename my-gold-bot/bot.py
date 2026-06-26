@@ -6,7 +6,7 @@ import pandas as pd
 from stable_baselines3 import PPO
 from gym_anytrading.envs import StocksEnv
 
-# إعدادات التليجرام الخاص.. 
+# إعدادات التليجرام
 BOT_TOKEN = '8713571843:AAEZXUlKQI2ahJojJIucz7yetf2_tqAPGiM'
 CHAT_ID = '679809289'
 bot = telebot.TeleBot(BOT_TOKEN)
@@ -21,19 +21,21 @@ def get_live_data():
     # جلب البيانات
     df = yf.download("GC=F", period="5d", interval="5m", auto_adjust=True)
     
-    # --- التنظيف الصارم للبيانات (حل مشكلة الـ Concatenation) ---
     if df.empty:
         return None
     
-    # حذف الصفوف الفارغة
-    df = df.dropna()
-    
-    # التأكد من أن العمود هو 'Close' فقط وتنسيق البيانات
+    # --- حماية إضافية ضد خطأ KeyError: 'Close' ---
+    # إذا كانت البيانات تحتوي على MultiIndex (أسماء أعمدة متداخلة)
     if isinstance(df.columns, pd.MultiIndex):
-        df = df.xs('Close', axis=1, level=0)
-    elif 'Close' in df.columns:
-        df = df[['Close']]
-        
+        df.columns = df.columns.get_level_values(0)
+    
+    # إذا لم يجد عمود 'Close' باسمه الصريح، نأخذ العمود الأول
+    if 'Close' not in df.columns:
+        df.rename(columns={df.columns[0]: 'Close'}, inplace=True)
+    
+    # نأخذ عمود الإغلاق فقط
+    df = df[['Close']].copy()
+    df = df.dropna()
     df = df.sort_index()
     df = df.astype(float)
     
@@ -42,9 +44,9 @@ def get_live_data():
 def trade():
     df = get_live_data()
     
-    # تحقق أمني: التأكد من وجود بيانات كافية (window_size=20 + هامش)
+    # تحقق أمني
     if df is None or len(df) < 25:
-        print("تحذير: بيانات السوق غير كافية، سيتم الانتظار...")
+        print("تحذير: البيانات غير كافية، سيتم الانتظار للدورة القادمة...")
         return
 
     try:
@@ -78,4 +80,5 @@ while True:
     except Exception as e:
         print(f"خطأ عام: {e}")
     
-    time.sleep(300) # انتظار 5 دقائق
+    # انتظار 5 دقائق
+    time.sleep(300)
