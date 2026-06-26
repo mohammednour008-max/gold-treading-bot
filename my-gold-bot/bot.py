@@ -2,36 +2,49 @@ import time
 import yfinance as yf
 import telebot
 import traceback
+import pandas as pd
 from stable_baselines3 import PPO
 from gym_anytrading.envs import StocksEnv
 
-# إعدادات التليجرام هنا
+# إعدادات التليجرام الخاص.. 
 BOT_TOKEN = '8713571843:AAEZXUlKQI2ahJojJIucz7yetf2_tqAPGiM'
 CHAT_ID = '679809289'
 bot = telebot.TeleBot(BOT_TOKEN)
 
-# تحميل النموذج (تأكد أن الملف gold_master_model.zip موجود في نفس المسار)
+# تحميل النموذج
 try:
     model = PPO.load("gold_master_model")
 except Exception as e:
     print(f"خطأ في تحميل النموذج: {e}")
 
 def get_live_data():
-    # جلب بيانات 5 أيام لضمان وجود نقاط كافية للنافذة (window_size=20)
+    # جلب البيانات
     df = yf.download("GC=F", period="5d", interval="5m", auto_adjust=True)
+    
+    # --- التنظيف الصارم للبيانات (حل مشكلة الـ Concatenation) ---
     if df.empty:
         return None
-    # تنظيف البيانات من القيم الفارغة
+    
+    # حذف الصفوف الفارغة
     df = df.dropna()
-    df = df[['Close']].copy()
+    
+    # التأكد من أن العمود هو 'Close' فقط وتنسيق البيانات
+    if isinstance(df.columns, pd.MultiIndex):
+        df = df.xs('Close', axis=1, level=0)
+    elif 'Close' in df.columns:
+        df = df[['Close']]
+        
+    df = df.sort_index()
+    df = df.astype(float)
+    
     return df
 
 def trade():
     df = get_live_data()
     
-    # تحقق أمني: التأكد من وجود بيانات كافية للنموذج (أكثر من 25 صفاً)
+    # تحقق أمني: التأكد من وجود بيانات كافية (window_size=20 + هامش)
     if df is None or len(df) < 25:
-        print("تحذير: بيانات السوق غير كافية حالياً، انتظار الدورة القادمة...")
+        print("تحذير: بيانات السوق غير كافية، سيتم الانتظار...")
         return
 
     try:
@@ -43,17 +56,13 @@ def trade():
         action, _ = model.predict(obs)
         
         # إرسال التنبيه
-        if action == 1:
-            msg = "🟢 إشارة: شراء الذهب (Gold Buy Signal)"
-        else:
-            msg = "🔴 إشارة: بيع الذهب (Gold Sell Signal)"
+        msg = "🟢 إشارة: شراء الذهب (Gold Buy Signal)" if action == 1 else "🔴 إشارة: بيع الذهب (Gold Sell Signal)"
             
         bot.send_message(CHAT_ID, msg)
         print(f"تم تنفيذ العملية بنجاح: {msg}")
             
     except Exception as e:
         print(f"خطأ أثناء معالجة النموذج: {e}")
-        # طباعة تفاصيل الخطأ للـ Logs
         traceback.print_exc()
 
 # --- بدء التشغيل ---
@@ -67,7 +76,6 @@ while True:
     try:
         trade()
     except Exception as e:
-        print(f"خطأ عام في حلقة العمل: {e}")
+        print(f"خطأ عام: {e}")
     
-    # انتظار 5 دقائق (300 ثانية)
-    time.sleep(300)
+    time.sleep(300) # انتظار 5 دقائق
