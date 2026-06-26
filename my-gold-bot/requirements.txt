@@ -5,3 +5,4 @@ gymnasium
 gym-anytrading
 numpy
 pandas
+pandas_ta
